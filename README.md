@@ -32,7 +32,7 @@
 ```bash
 npm install
 npx @vscode/vsce package
-code --install-extension md-bilingual-reader-1.0.2.vsix
+code --install-extension md-bilingual-reader-1.0.3.vsix
 ```
 
 装完要 `Developer: Reload Window`。
@@ -64,7 +64,7 @@ code --install-extension md-bilingual-reader-1.0.2.vsix
 | `mdBilingual.model` | 空 → 回落 | 模型名。`deepseek-*`、`gpt-*`、`claude-*` 都行，见下节 |
 | `mdBilingual.targetLanguage` | 空 → 回落 | 目标语言，如 `Simplified Chinese` |
 | `mdBilingual.glossary` | `{}` | 术语表，`原文 → 指定译文`。例如 `{"context window": "上下文窗口", "token": "词元"}`。改术语表会让旧缓存失效 |
-| `mdBilingual.layout` | `side-by-side` | `side-by-side` 并排、`translation-only` 仅译文、`stacked` 上下堆叠 |
+| `mdBilingual.layout` | `translation-only` | `translation-only` 仅译文（默认）、`side-by-side` 并排、`stacked` 上下堆叠 |
 | `mdBilingual.maxSegmentsPerBatch` | 20 | 每批段落数，调小可降低模型弄错 id 的概率 |
 | `mdBilingual.maxCharsPerBatch` | 6000 | 每批字符数 |
 | `mdBilingual.concurrency` | 1 | 并发请求数。默认串行，对配额紧张的网关最友好 |

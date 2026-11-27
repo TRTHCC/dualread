@@ -2,7 +2,7 @@
   "name": "md-bilingual-reader",
   "displayName": "DualRead — Markdown 双语阅读",
   "description": "DualRead：在 VS Code 里并排或仅译文阅读 Markdown，只读预览，永不写回文件",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "trthcc",
   "author": "TRTHCC",
   "license": "MIT",
@@ -179,7 +179,7 @@
         },
         "mdBilingual.layout": {
           "type": "string",
-          "default": "side-by-side",
+          "default": "translation-only",
           "enum": [
             "side-by-side",
             "translation-only",
@@ -190,7 +190,7 @@
             "仅译文：只显示译文，代码块保留原样",
             "上下堆叠：适合窄面板"
           ],
-          "description": "布局方式。面板右上角的「切换布局」按 并排 → 仅译文 → 堆叠 循环。"
+          "description": "布局方式，默认仅译文。面板右上角的「切换布局」按 并排 → 仅译文 → 堆叠 循环。"
         },
         "mdBilingual.autoRefresh": {
           "type": "boolean",

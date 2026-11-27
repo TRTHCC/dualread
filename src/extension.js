@@ -47,7 +47,7 @@ function resolveConfig() {
     retryMaxDelayMs: mine.get('retryMaxDelayMs', 30000),
     reasoningEffort: mine.get('reasoningEffort', 'auto'),
     useJsonResponseFormat: mine.get('useJsonResponseFormat', false),
-    layout: mine.get('layout', 'side-by-side'),
+    layout: mine.get('layout', 'translation-only'),
     autoRefresh: mine.get('autoRefresh', true),
     glossary: normalizeGlossary(mine.get('glossary', {})),
   };
