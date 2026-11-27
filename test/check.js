@@ -493,14 +493,14 @@ t('仅译文模式保留原文单元格，靠 CSS 隐藏（切换不丢内容）
 
 
 
-t('可翻译块带跳转标记，代码块不带', () => {
+t('可翻译块带展开原文标记，代码块不带', () => {
   const blocks = [
     { index: 0, kind: 'paragraph', text: 'hello', translatable: true },
     { index: 1, kind: 'code', text: '```\nx\n```', translatable: false },
   ];
   const html = buildHtml({ cspSource: 'vscode-resource:', title: 't.md', blocks, layout: 'side-by-side', targetLanguage: '中文' });
   assert.ok(html.includes('data-index="0"'));
-  assert.ok(html.includes('title="点击跳到原文"'));
+  assert.ok(html.includes('title="点击展开原文"'));
   assert.ok(!html.includes('data-index="1"'));
 });
 

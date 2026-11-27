@@ -9,7 +9,7 @@ DualRead 把译文放在侧边面板，原文留在编辑器。读技术文档�
 - **按块对齐**：标题、段落、列表、表格逐块翻译，代码块原样保留
 - **术语一致**：用术语表固定关键概念的译法
 - **减少重复请求**：译文落盘缓存，同一段只翻一次
-- **点击回原文**：点任意译文，跳到对应源码行
+- **点击看原文**：点任意译文，在原位展开该段原文，左侧编辑器不受影响
 
 接口走 OpenAI 兼容格式，OpenRouter、DeepSeek、本地 Ollama 都能接；API Key 存在 VS Code SecretStorage 里。
 
@@ -39,7 +39,7 @@ DualRead 把译文放在侧边面板，原文留在编辑器。读技术文档�
 ```bash
 npm install
 npx @vscode/vsce package
-code --install-extension md-bilingual-reader-1.0.3.vsix
+code --install-extension md-bilingual-reader-1.0.6.vsix
 ```
 
 装完要 `Developer: Reload Window`。
@@ -52,7 +52,9 @@ code --install-extension md-bilingual-reader-1.0.3.vsix
 
 面板右上角有「切换布局」（并排 → 仅译文 → 上下堆叠）和「重新翻译」（忽略缓存、强制重译当前文档）。**仅译文**模式下左栏收起，只显示译文；代码块和 HTML 保留原样，frontmatter 和链接定义隐藏。
 
-- **点击右侧译文** → 编辑器跳到该段的原文行。选中文字或点击链接时不会触发跳转。
+- **面板位置**：固定在当前 Markdown 所在列的右侧；再次打开会复用同一个面板，不会在左右栏之间跳。
+- **跟随标签**：开启 `mdBilingual.followActiveEditor` 后，左侧切换 Markdown 标签，右侧自动切到对应文件的译文。面板位置不变；切到非 Markdown 标签时保留当前内容；还没缓存的文档会发起翻译请求。
+- **点击右侧译文** → 在原位展开该段原文，再点收起；不会切换左侧的 Markdown 预览。选中文字或点击链接时不会触发。
 - 译文默认缓存在 VS Code 的 globalStorage 里，重开窗口、重开文档都不再请求。要全局清空用命令 **Markdown 双语阅读：清空译文缓存**。
 
 ### 关于自定义编辑器
@@ -81,6 +83,7 @@ code --install-extension md-bilingual-reader-1.0.3.vsix
 | `mdBilingual.reasoningEffort` | `auto` | 翻译不需要思考；`auto` 对 gpt 推理模型发 `none`、对 `claude-*` 发 `low`、对 `deepseek-*` 关闭思考 |
 | `mdBilingual.requestTimeoutMs` | 120000 | 单次请求超时 |
 | `mdBilingual.autoRefresh` | `true` | 源文件改动时自动重译改动的段落 |
+| `mdBilingual.followActiveEditor` | `false` | 左侧切换 Markdown 标签时右侧自动跟随；未缓存段落会产生请求 |
 
 ## 接 DeepSeek
 
@@ -215,9 +218,8 @@ grep -rE 'writeFile|WorkspaceEdit|applyEdit|\.edit\(|fs\.' src/
 
 - 译文持久化缓存（globalStorage + 原子落盘 + 容量上限）与「清空译文缓存」命令
 - 术语表 `mdBilingual.glossary`，注入 system prompt，并参与缓存 key
-- 段落行号映射与「点击译文跳原文」
-- 「仅译文」布局与面板内布局切换
-- 点击译文跳原文
+- 「仅译文」默认布局、布局切换与面板固定位置
+- 点击译文在原位展开原文
 - 相关单元测试（`node test/check.js`）
 
 原仓库的 MIT 许可证与版权声明保留在 `LICENSE` 中。
@@ -225,7 +227,7 @@ grep -rE 'writeFile|WorkspaceEdit|applyEdit|\.edit\(|fs\.' src/
 ## 自检
 
 ```bash
-node test/check.js                      # 67 项单元检查
+node test/check.js                      # 79 项单元检查
 node test/check.js path/to/some.md      # 再附加一份真实文档的分段统计
 ```
 

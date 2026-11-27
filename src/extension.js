@@ -16,6 +16,10 @@ let cacheStore;
 /** uri.toString() -> session */
 const sessions = new Map();
 
+/** 最近打开的翻译面板；左侧切换标签时复用它，而不是每个文件开一个。 */
+let followSession;
+let followTimer;
+
 // ---------------------------------------------------------------- 配置
 
 /**
@@ -49,6 +53,7 @@ function resolveConfig() {
     useJsonResponseFormat: mine.get('useJsonResponseFormat', false),
     layout: mine.get('layout', 'translation-only'),
     autoRefresh: mine.get('autoRefresh', true),
+    followActiveEditor: mine.get('followActiveEditor', false),
     glossary: normalizeGlossary(mine.get('glossary', {})),
   };
 }
@@ -284,7 +289,9 @@ function waitForWebview(session, timeoutMs = 3000) {
 }
 
 async function render(session, context, { force = false } = {}) {
+  const token = ++session.renderToken;
   const text = await readText(session.uri);
+  if (token !== session.renderToken) return;  // 读盘期间已切到别的文件
   session.blocks = segment(text);
   const ready = waitForWebview(session);
   session.panel.webview.html = buildHtml({
@@ -295,26 +302,140 @@ async function render(session, context, { force = false } = {}) {
     targetLanguage: resolveConfig().targetLanguage,
   });
   await ready;
+  if (token !== session.renderToken) return;  // 等 ready 期间又被切走
   if (!sessions.has(session.key)) return;   // 等待期间面板可能已经被关掉
   await translateSession(session, context, { force });
 }
 
-// ---------------------------------------------------------------- 定位原文
+// ---------------------------------------------------------------- 命令
 
-async function revealSource(session, index) {
-  const block = session.blocks[index];
-  if (!block) return;
-  const doc = await vscode.workspace.openTextDocument(session.uri);
-  const editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
-  const lastLine = Math.max(0, doc.lineCount - 1);
-  const start = Math.max(0, Math.min(block.startLine, lastLine));
-  const end = Math.max(start, Math.min(block.endLine, lastLine));
-  const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
-  editor.selection = new vscode.Selection(start, 0, start, 0);
-  editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+/** 这篇文档所在的编辑器列；内置预览没有文本编辑器时，退回它所在的标签组。 */
+function resolveTargetColumn(uri) {
+  const key = uri.toString();
+  const name = path.basename(uri.fsPath);
+  const activeEditor = vscode.window.activeTextEditor;
+  if (activeEditor && activeEditor.document.uri.toString() === key) return activeEditor.viewColumn;
+
+  // 当前标签组就是这篇文档（源码、自定义编辑器，或标签名匹配的内置预览）时，
+  // 以它为准，避免源文件在另一组时把面板开进预览所在的组。
+  const activeGroup = vscode.window.tabGroups.activeTabGroup;
+  if (activeGroup && activeGroup.activeTab) {
+    const input = activeGroup.activeTab.input;
+    const candidate = input && (input.uri || input.modified);
+    const sameUri = candidate instanceof vscode.Uri && candidate.toString() === key;
+    const sameName = !candidate && name && activeGroup.activeTab.label.includes(name);
+    if (sameUri || sameName) return activeGroup.viewColumn;
+  }
+
+  const editors = vscode.window.visibleTextEditors.filter(e => e.document.uri.toString() === key);
+  if (editors.length) return editors[0].viewColumn;
+
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      const input = tab.input;
+      const candidate = input && (input.uri || input.modified);
+      if (candidate instanceof vscode.Uri && candidate.toString() === key) return group.viewColumn;
+    }
+  }
+
+  return activeGroup ? activeGroup.viewColumn : undefined;
 }
 
-// ---------------------------------------------------------------- 命令
+function isMarkdownUri(uri) {
+  return uri instanceof vscode.Uri && MD_EXT.has(path.extname(uri.fsPath).toLowerCase());
+}
+
+function isMarkdownDoc(doc) {
+  return isMarkdownUri(doc.uri);
+}
+
+function tabUri(input) {
+  if (!input) return undefined;
+  if (input.uri instanceof vscode.Uri) return input.uri;
+  if (input.modified instanceof vscode.Uri) return input.modified;
+  return undefined;
+}
+
+/** 内置预览没有 URI，只能按标签名在已打开的文档里找同名的 Markdown。 */
+function uriFromPreviewLabel(label) {
+  const raw = String(label || '').trim();
+  const stripped = raw
+    .replace(/\s*[（(][^）)]*[）)]\s*$/, '')
+    .replace(/^(?:Preview|预览)\s+/i, '')
+    .trim();
+  const names = stripped && stripped !== raw ? [raw, stripped] : [raw];
+  const docs = vscode.workspace.textDocuments.filter(isMarkdownDoc);
+  for (const name of names) {
+    if (!name) continue;
+    const doc = docs.find(d => path.basename(d.uri.fsPath) === name);
+    if (doc) return doc.uri;
+  }
+  // 标签可能带前缀（如「预览 README.md」），退一步按包含关系找最长的文件名
+  const byLength = docs
+    .filter(d => {
+      const base = path.basename(d.uri.fsPath);
+      return base && names.some(name => name.includes(base));
+    })
+    .sort((a, b) =>
+      path.basename(b.uri.fsPath).length - path.basename(a.uri.fsPath).length);
+  return byLength.length ? byLength[0].uri : undefined;
+}
+
+function activeMarkdownUri() {
+  const editor = vscode.window.activeTextEditor;
+  if (editor && isMarkdownUri(editor.document.uri)) return editor.document.uri;
+
+  const group = vscode.window.tabGroups.activeTabGroup;
+  const tab = group && group.activeTab;
+  if (!tab) return undefined;
+  const uri = tabUri(tab.input);
+  if (isMarkdownUri(uri)) return uri;
+  if (tab.input instanceof vscode.TabInputWebview && /markdown\.preview/i.test(tab.input.viewType)) {
+    return uriFromPreviewLabel(tab.label);
+  }
+  return undefined;
+}
+
+async function bindSession(session, uri, context) {
+  const key = uri.toString();
+  if (session.key === key) return;
+  if (session.timer) {
+    clearTimeout(session.timer);
+    session.timer = undefined;
+  }
+  session.renderToken++;       // 让上一个文件还在等 ready 的 render 作废
+  if (session.signalReady) {
+    session.signalReady();
+    session.signalReady = undefined;
+  }
+  session.runId++;
+  sessions.delete(session.key);
+  session.key = key;
+  session.uri = uri;
+  sessions.set(key, session);
+  session.panel.title = `双语：${path.basename(uri.fsPath)}`;
+  await render(session, context);
+}
+
+function followActiveMarkdown(context) {
+  if (!followSession || !resolveConfig().followActiveEditor) return;
+  const uri = activeMarkdownUri();
+  if (!uri) return;
+  const key = uri.toString();
+  if (key === followSession.key) return;
+  if (followTimer) clearTimeout(followTimer);
+  followTimer = setTimeout(() => {
+    followTimer = undefined;
+    const session = followSession;
+    if (!session || !resolveConfig().followActiveEditor) return;
+    // 去抖期间可能又切走了：以触发时的活动文件为准
+    const current = activeMarkdownUri();
+    if (!current || current.toString() === session.key) return;
+    bindSession(session, current, context).catch(error => {
+      session.panel.webview.postMessage({ type: 'error', message: String(error && error.message || error) });
+    });
+  }, 150);
+}
 
 async function openPreview(context, arg) {
   const uri = resolveTargetUri(arg);
@@ -324,26 +445,53 @@ async function openPreview(context, arg) {
   }
 
   const key = uri.toString();
+  const sourceColumn = resolveTargetColumn(uri);
+  const targetColumn = sourceColumn ? sourceColumn + 1 : vscode.ViewColumn.Beside;
+
   const existing = sessions.get(key);
   if (existing) {
-    existing.panel.reveal(vscode.ViewColumn.Beside, true);
+    followSession = existing;
+    existing.panel.reveal(existing.panel.viewColumn || targetColumn, true);
     return;
   }
 
-  const panel = vscode.window.createWebviewPanel(
+  const reusable = followSession && sessions.get(followSession.key) === followSession ? followSession : undefined;
+  if (reusable) {
+    await bindSession(reusable, uri, context);
+    reusable.panel.reveal(reusable.panel.viewColumn || targetColumn, true);
+    return;
+  }
+
+  const create = (viewColumn) => vscode.window.createWebviewPanel(
     'mdBilingual.preview',
     `双语：${path.basename(uri.fsPath)}`,
-    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+    { viewColumn, preserveFocus: true },
     { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [] },
   );
 
-  const session = { key, uri, panel, blocks: [], layout: resolveConfig().layout, runId: 0, timer: undefined };
+  let panel;
+  try {
+    panel = create(targetColumn);
+  } catch {
+    panel = create(vscode.ViewColumn.Beside);
+  }
+
+  const session = {
+    key, uri, panel, blocks: [], layout: resolveConfig().layout,
+    runId: 0, renderToken: 0, timer: undefined,
+  };
   sessions.set(key, session);
+  followSession = session;
 
   panel.onDidDispose(() => {
     if (session.timer) clearTimeout(session.timer);
     session.runId++;            // 让还在跑的批次停止往已销毁的面板发消息
-    sessions.delete(key);
+    sessions.delete(session.key);
+    if (followSession === session) followSession = undefined;
+    if (followTimer) {
+      clearTimeout(followTimer);
+      followTimer = undefined;
+    }
   });
 
   panel.webview.onDidReceiveMessage(async (msg) => {
@@ -357,12 +505,6 @@ async function openPreview(context, arg) {
       const index = order.indexOf(session.layout);
       session.layout = order[(index + 1) % order.length] || order[0];
       panel.webview.postMessage({ type: 'layout', layout: session.layout });
-    } else if (msg.type === 'reveal') {
-      try {
-        await revealSource(session, msg.index);
-      } catch (error) {
-        panel.webview.postMessage({ type: 'error', message: String(error && error.message || error) });
-      }
     }
   });
 
@@ -415,11 +557,21 @@ async function activate(context) {
         });
       }, 800);
     }),
+
+    // 左侧切换 Markdown 标签 → 复用的翻译面板跟随过去
+    vscode.window.onDidChangeActiveTextEditor(() => followActiveMarkdown(context)),
+    vscode.window.tabGroups.onDidChangeTabs(() => followActiveMarkdown(context)),
+    vscode.window.tabGroups.onDidChangeTabGroups(() => followActiveMarkdown(context)),
   );
 }
 
 async function deactivate() {
   sessions.clear();
+  followSession = undefined;
+  if (followTimer) {
+    clearTimeout(followTimer);
+    followTimer = undefined;
+  }
   if (cacheStore) {
     await cacheStore.flush();
     cacheStore = undefined;

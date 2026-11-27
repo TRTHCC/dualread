@@ -81,7 +81,22 @@ body.translation-only .cell.t { border-left: 0; padding-left: 0; margin-left: 0;
 
 .cell { min-width: 0; overflow-wrap: anywhere; }
 .cell.t { color: var(--vscode-foreground); }
-.jumpable .cell.t { cursor: pointer; }
+body.translation-only .jumpable .cell.t { cursor: pointer; }
+body.translation-only .row.show-original .cell.original {
+  display: block;
+  padding: 0 0 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px dashed var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground);
+}
+body.translation-only .row.show-original .cell.original::before {
+  content: "原文";
+  display: block;
+  font-size: 0.75em;
+  letter-spacing: .05em;
+  margin-bottom: 4px;
+  color: var(--vscode-descriptionForeground);
+}
 body.side-by-side .cell.t { border-left: 1px solid var(--vscode-panel-border); padding-left: 32px; margin-left: -32px; }
 .pending { color: var(--vscode-descriptionForeground); font-style: italic; opacity: .6; }
 .failed { color: var(--vscode-descriptionForeground); font-style: italic; }
@@ -138,18 +153,20 @@ window.addEventListener('message', (event) => {
     document.getElementById('err').classList.remove('show');
   } else if (msg.type === 'layout') {
     document.body.className = msg.layout;
+    document.querySelectorAll('.row.show-original').forEach(row => row.classList.remove('show-original'));
   }
 });
 document.getElementById('refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 document.getElementById('toggle').addEventListener('click', () => vscode.postMessage({ type: 'toggleLayout' }));
 
-// 点译文跳到原文对应行。选区和链接优先——用户想复制或点链接时不要抢。
+// 点译文在面板内展开原文，不改动左侧编辑器。选区和链接优先。
 document.getElementById('doc').addEventListener('click', (event) => {
   if (!event.target.closest || event.target.closest('a')) return;
   if (window.getSelection && String(window.getSelection()).trim()) return;
+  if (!document.body.classList.contains('translation-only')) return;
   const cell = event.target.closest('.cell.t');
   const row = cell && cell.closest('.row.jumpable');
-  if (row) vscode.postMessage({ type: 'reveal', index: Number(row.dataset.index) });
+  if (row) row.classList.toggle('show-original');
 });
 
 // 监听器已挂好，扩展端可以开始发消息了。
@@ -170,7 +187,7 @@ function buildHtml({ cspSource, title, blocks, layout, targetLanguage }) {
     }
     return `<div class="row jumpable" data-kind="${block.kind}" data-index="${block.index}">` +
       `<div class="cell original">${left}</div>` +
-      `<div class="cell t pending" id="t${block.index}" title="点击跳到原文">翻译中…</div>` +
+      `<div class="cell t pending" id="t${block.index}" title="点击展开原文">翻译中…</div>` +
       `</div>`;
   }).join('\n');
 
