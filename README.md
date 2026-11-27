@@ -1,31 +1,38 @@
 # DualRead
 
-**Markdown 双语阅读 for VS Code。** 把原文和 AI 译文左右并排或仅译文显示，纯只读预览，**永远不写回文件**。
+**在 VS Code 里读英文 Markdown。**
 
-译文**落盘缓存**（重开 VS Code 不重翻），支持**术语表**强制统一译法，**点击译文可直接跳到原文对应行**。
+DualRead 把译文放在侧边面板，原文留在编辑器。读技术文档时，你不用在浏览器、翻译网站和编辑器之间来回切换。
 
-当前维护者：TRTHCC（扩展 ID `trthcc.md-bilingual-reader`），基于 foxnz/md-bilingual-preview 二开。
+- **默认仅译文**：右边看中文，左边继续对照原稿
+- **只读**：不修改源文件，也不生成第二份 Markdown
+- **按块对齐**：标题、段落、列表、表格逐块翻译，代码块原样保留
+- **术语一致**：用术语表固定关键概念的译法
+- **减少重复请求**：译文落盘缓存，同一段只翻一次
+- **点击回原文**：点任意译文，跳到对应源码行
+
+接口走 OpenAI 兼容格式，OpenRouter、DeepSeek、本地 Ollama 都能接；API Key 存在 VS Code SecretStorage 里。
 
 ```
-┌─────────────────────────────┬─────────────────────────────┐
-│ # Video clip retrieval      │ # 视频片段检索              │
-├─────────────────────────────┼─────────────────────────────┤
-│ A user asks a question. The │ 用户提出一个问题。智能体判  │
-│ agent decides a tutorial... │ 断某个教程视频能够回答它… │
-├─────────────────────────────┴─────────────────────────────┤
-│ ```json                                                   │
-│ { "clip_id": "c_123" }        ← 代码块不翻译，整行通栏    │
-│ ```                                                       │
-└───────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ # 视频片段检索                               │
+│                                              │
+│ 用户提出一个问题。智能体判断某个教程视频…    │
+├──────────────────────────────────────────────┤
+│ ```json                                      │
+│ { "clip_id": "c_123" }   ← 代码块不翻译      │
+│ ```                                          │
+└──────────────────────────────────────────────┘
 ```
 
-## 为什么不用现成的插件
+默认仅译文；需要逐句核对术语时再切换到并排。
 
-- `harryplusplus.bilingual-markdown-preview` —— 双语并排、不落盘，但只能用 Google 机翻
-- `sunven.vscode-extension-md-translator` —— 能用自建模型，但预览只有译文没有原文，且带一个会覆盖源文件的「替换」按钮
-- `breaking-brake.markdown-ai-translator` —— 依赖 `vscode.lm`，要装 GitHub Copilot
+## 它适合什么场景
 
-三个都缺一块。这个插件把三件事凑齐：并排 + 只读 + 自己的模型。
+- 读开源项目的英文 README、设计文档、API 文档
+- 翻译技术文章或课程笔记，但不想破坏原稿
+- 团队里中英文文档并存，需要统一术语
+- 用本地模型或免费额度，控制翻译成本
 
 ## 安装
 
@@ -50,13 +57,13 @@ code --install-extension md-bilingual-reader-1.0.3.vsix
 
 ### 关于自定义编辑器
 
-如果你把 `*.md` 关联到了别的自定义编辑器（比如 `markdownForHumans.editor`），很多插件会因为拿不到 `activeTextEditor` 而静默失效。这个插件按三条路依次找目标文件：命令参数 → `activeTextEditor` → `window.tabGroups` 的活动标签页，所以在自定义编辑器下**照常可用**，不需要先切成文本编辑器。
+如果你把 `*.md` 关联到了自定义编辑器（比如 `markdownForHumans.editor`），`activeTextEditor` 可能为空。本插件会按三条路依次找目标文件：命令参数 → `activeTextEditor` → `window.tabGroups` 的活动标签页，所以不需要先切回文本编辑器。
 
 ## 配置
 
 所有配置项都在 `mdBilingual.*` 下。
 
-**只有 `apiBaseUrl`、`model`、`targetLanguage` 这三项**留空时会回落到 `mdTranslator.*`（sunven 那个插件的命名空间），所以接口地址和模型不用重配。**其余各项不回落**——`mdTranslator.maxChunkChars` 之类的设置对本插件没有任何作用，要调就得写成 `mdBilingual.*`。
+为了兼容已有的 `mdTranslator.*` 配置，`apiBaseUrl`、`model`、`targetLanguage` 留空时会回落到那套设置；其余配置项不回落，需要写成 `mdBilingual.*`。
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
