@@ -24,6 +24,38 @@ function renderMarkdown(text) {
   }
 }
 
+/** 取标题块第一行的标题文字，去掉 # 标记和行尾的闭合 #。 */
+function headingText(text) {
+  const line = String(text).split('\n')[0] || '';
+  return line.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/\s+#+\s*$/, '');
+}
+
+/** ATX（# 标题）和 Setext（下一行 === / ---）的标题文字。 */
+function headingSource(block) {
+  if (block.kind === 'heading') return headingText(block.text);
+  if (block.kind !== 'paragraph') return '';
+  const lines = String(block.text).split('\n');
+  if (lines.length >= 2 && /^\s{0,3}(?:=+|-+)\s*$/.test(lines[1])) return lines[0];
+  return '';
+}
+
+/**
+ * 按 GitHub 的习惯生成标题锚点：小写、去掉标点、空格换连字符。
+ * 中文等非拉丁文字保留原样，不然 `#中文标题` 这类链接会失效。
+ */
+function anchorSlug(text) {
+  const explicit = /\{#([^\s}]+)\}\s*$/.exec(String(text));
+  if (explicit) return explicit[1];
+  return String(text)
+    .replace(/<[^>]*>/g, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-');
+}
+
 const STYLE = `
 :root { color-scheme: light dark; }
 * { box-sizing: border-box; }
@@ -68,7 +100,7 @@ body {
 #warn.show { display: block; }
 #doc { padding: 4px 16px 64px; }
 
-.row { display: grid; gap: 0 32px; align-items: start; border-bottom: 1px solid transparent; }
+.row { display: grid; gap: 0 32px; align-items: start; border-bottom: 1px solid transparent; scroll-margin-top: 52px; }
 body.side-by-side .row { grid-template-columns: 1fr 1fr; }
 body.stacked .row, body.translation-only .row { grid-template-columns: 1fr; }
 body.stacked .row .t { padding-top: 0; }
@@ -129,6 +161,11 @@ img { max-width: 100%; }
 
 const SCRIPT = `
 const vscode = acquireVsCodeApi();
+function scrollToAnchor(id) {
+  if (!id) return;
+  const target = document.getElementById(id);
+  if (target) target.scrollIntoView({ block: 'start' });
+}
 window.addEventListener('message', (event) => {
   const msg = event.data;
   if (msg.type === 'translated') {
@@ -154,14 +191,39 @@ window.addEventListener('message', (event) => {
   } else if (msg.type === 'layout') {
     document.body.className = msg.layout;
     document.querySelectorAll('.row.show-original').forEach(row => row.classList.remove('show-original'));
+  } else if (msg.type === 'scrollToAnchor') {
+    scrollToAnchor(msg.id);
   }
 });
 document.getElementById('refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 document.getElementById('toggle').addEventListener('click', () => vscode.postMessage({ type: 'toggleLayout' }));
 
-// 点译文在面板内展开原文，不改动左侧编辑器。选区和链接优先。
+// 标题锚点在本页滚动；点译文在面板内展开原文，不改动左侧编辑器。选区和链接优先。
 document.getElementById('doc').addEventListener('click', (event) => {
-  if (!event.target.closest || event.target.closest('a')) return;
+  if (!event.target.closest) return;
+  const link = event.target.closest('a');
+  if (link) {
+    const href = link.getAttribute('href') || '';
+    if (href.startsWith('#')) {
+      event.preventDefault();
+      if (href === '#') {
+        window.scrollTo({ top: 0 });
+        return;
+      }
+      let id = href.slice(1);
+      try { id = decodeURIComponent(id); } catch {}
+      scrollToAnchor(id);
+      return;
+    }
+    // 相对 Markdown 链接（可带锚点）交给扩展端，在同一面板打开目标文档
+    const pathPart = href.split(/[?#]/)[0].toLowerCase();
+    const relative = !/^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith('//');
+    if (relative && (pathPart.endsWith('.md') || pathPart.endsWith('.markdown'))) {
+      event.preventDefault();
+      vscode.postMessage({ type: 'openDocLink', href });
+    }
+    return;
+  }
   if (window.getSelection && String(window.getSelection()).trim()) return;
   if (!document.body.classList.contains('translation-only')) return;
   const cell = event.target.closest('.cell.t');
@@ -180,12 +242,23 @@ vscode.postMessage({ type: 'ready' });
  */
 function buildHtml({ cspSource, title, blocks, layout, targetLanguage }) {
   const n = nonce();
+  const usedAnchors = new Set();
+  const anchorOf = (block) => {
+    const base = anchorSlug(headingSource(block));
+    if (!base) return '';
+    let slug = base;
+    let n = 0;
+    while (usedAnchors.has(slug)) slug = `${base}-${++n}`;
+    usedAnchors.add(slug);
+    return ` id="${escapeHtml(slug)}"`;
+  };
   const rows = blocks.map(block => {
     const left = renderMarkdown(block.text);
+    const anchor = anchorOf(block);
     if (!block.translatable) {
-      return `<div class="row full" data-kind="${block.kind}"><div class="cell original">${left}</div></div>`;
+      return `<div class="row full"${anchor} data-kind="${block.kind}"><div class="cell original">${left}</div></div>`;
     }
-    return `<div class="row jumpable" data-kind="${block.kind}" data-index="${block.index}">` +
+    return `<div class="row jumpable"${anchor} data-kind="${block.kind}" data-index="${block.index}">` +
       `<div class="cell original">${left}</div>` +
       `<div class="cell t pending" id="t${block.index}" title="点击展开原文">翻译中…</div>` +
       `</div>`;

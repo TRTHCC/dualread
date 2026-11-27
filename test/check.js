@@ -504,6 +504,24 @@ t('可翻译块带展开原文标记，代码块不带', () => {
   assert.ok(!html.includes('data-index="1"'));
 });
 
+t('标题生成 GitHub 风格锚点，重名标题自动加序号', () => {
+  const blocks = [
+    { index: 0, kind: 'heading', text: '## Hello World', translatable: true },
+    { index: 1, kind: 'heading', text: '## 中文 标题', translatable: true },
+    { index: 2, kind: 'paragraph', text: 'Setext Heading\n==============', translatable: true },
+    { index: 3, kind: 'heading', text: '## Hello World', translatable: true },
+  ];
+  const html = buildHtml({ cspSource: 'vscode-resource:', title: 't.md', blocks, layout: 'translation-only', targetLanguage: '中文' });
+  assert.ok(html.includes('id="hello-world"'));
+  assert.ok(html.includes('id="中文-标题"'));
+  assert.ok(html.includes('id="setext-heading"'));
+  assert.ok(html.includes('id="hello-world-1"'));
+  assert.ok(html.includes('scrollIntoView'));
+  assert.ok(html.includes("href.startsWith('#')"));
+  assert.ok(html.includes("vscode.postMessage({ type: 'openDocLink', href })"));
+  assert.ok(html.includes("msg.type === 'scrollToAnchor'"));
+});
+
 console.log('\n— 分段行号 —');
 
 t('frontmatter、标题、代码、尾段的起止行都对得上', () => {

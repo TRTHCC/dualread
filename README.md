@@ -39,7 +39,7 @@ DualRead 把译文放在侧边面板，原文留在编辑器。读技术文档�
 ```bash
 npm install
 npx @vscode/vsce package
-code --install-extension md-bilingual-reader-1.0.6.vsix
+code --install-extension md-bilingual-reader-1.0.8.vsix
 ```
 
 装完要 `Developer: Reload Window`。
@@ -54,7 +54,8 @@ code --install-extension md-bilingual-reader-1.0.6.vsix
 
 - **面板位置**：固定在当前 Markdown 所在列的右侧；再次打开会复用同一个面板，不会在左右栏之间跳。
 - **跟随标签**：开启 `mdBilingual.followActiveEditor` 后，左侧切换 Markdown 标签，右侧自动切到对应文件的译文。面板位置不变；切到非 Markdown 标签时保留当前内容；还没缓存的文档会发起翻译请求。
-- **点击右侧译文** → 在原位展开该段原文，再点收起；不会切换左侧的 Markdown 预览。选中文字或点击链接时不会触发。
+- **点击右侧译文** → 在原位展开该段原文，再点收起；不会切换左侧的 Markdown 预览。选中文字或点击链接时不会展开。
+- **标题锚点**：`[跳到某节](#标题)` 在面板里滚动到对应标题；`[另一篇](other.md#标题)` 会让左侧编辑器和右侧面板一起切到目标文档，右侧滚到锚点（还没缓存的段落会发起翻译）。中文标题、重名标题都能对上。
 - 译文默认缓存在 VS Code 的 globalStorage 里，重开窗口、重开文档都不再请求。要全局清空用命令 **Markdown 双语阅读：清空译文缓存**。
 
 ### 关于自定义编辑器
@@ -227,7 +228,7 @@ grep -rE 'writeFile|WorkspaceEdit|applyEdit|\.edit\(|fs\.' src/
 ## 自检
 
 ```bash
-node test/check.js                      # 79 项单元检查
+node test/check.js                      # 80 项单元检查
 node test/check.js path/to/some.md      # 再附加一份真实文档的分段统计
 ```
 

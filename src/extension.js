@@ -288,7 +288,7 @@ function waitForWebview(session, timeoutMs = 3000) {
   });
 }
 
-async function render(session, context, { force = false } = {}) {
+async function render(session, context, { force = false, anchor = '' } = {}) {
   const token = ++session.renderToken;
   const text = await readText(session.uri);
   if (token !== session.renderToken) return;  // 读盘期间已切到别的文件
@@ -304,6 +304,7 @@ async function render(session, context, { force = false } = {}) {
   await ready;
   if (token !== session.renderToken) return;  // 等 ready 期间又被切走
   if (!sessions.has(session.key)) return;   // 等待期间面板可能已经被关掉
+  if (anchor) session.panel.webview.postMessage({ type: 'scrollToAnchor', id: anchor });
   await translateSession(session, context, { force });
 }
 
@@ -343,6 +344,18 @@ function resolveTargetColumn(uri) {
 
 function isMarkdownUri(uri) {
   return uri instanceof vscode.Uri && MD_EXT.has(path.extname(uri.fsPath).toLowerCase());
+}
+
+/** 文档当前所在的标签组列；找不到时返回 undefined。 */
+function columnOfUri(uri) {
+  const key = uri.toString();
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      const candidate = tabUri(tab.input);
+      if (candidate instanceof vscode.Uri && candidate.toString() === key) return group.viewColumn;
+    }
+  }
+  return undefined;
 }
 
 function isMarkdownDoc(doc) {
@@ -396,7 +409,7 @@ function activeMarkdownUri() {
   return undefined;
 }
 
-async function bindSession(session, uri, context) {
+async function bindSession(session, uri, context, { anchor = '' } = {}) {
   const key = uri.toString();
   if (session.key === key) return;
   if (session.timer) {
@@ -414,7 +427,67 @@ async function bindSession(session, uri, context) {
   session.uri = uri;
   sessions.set(key, session);
   session.panel.title = `双语：${path.basename(uri.fsPath)}`;
-  await render(session, context);
+  await render(session, context, { anchor });
+}
+
+/** 跨文档 Markdown 链接的目标：解析相对路径，只允许工作区或文档同目录内的 .md。 */
+function docLinkTarget(session, href) {
+  let url;
+  try {
+    url = new URL(String(href || ''), session.uri.toString());
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'file:' || url.host) return undefined;
+
+  const uri = vscode.Uri.parse(url.toString()).with({ fragment: '', query: '' });
+  if (!isMarkdownUri(uri)) return undefined;
+
+  const baseDir = path.dirname(session.uri.fsPath);
+  const insideDocDir = uri.fsPath === baseDir || uri.fsPath.startsWith(baseDir + path.sep);
+  if (!vscode.workspace.getWorkspaceFolder(uri) && !insideDocDir) {
+    vscode.window.showWarningMessage('链接指向工作区之外的文件，已忽略。');
+    return undefined;
+  }
+
+  let anchor = url.hash ? url.hash.slice(1) : '';
+  try { anchor = decodeURIComponent(anchor); } catch {}
+  return { uri, anchor };
+}
+
+async function openDocLink(session, href, context) {
+  const target = docLinkTarget(session, href);
+  if (!target) return;
+
+  if (target.uri.toString() === session.uri.toString()) {
+    if (target.anchor) {
+      session.panel.webview.postMessage({ type: 'scrollToAnchor', id: target.anchor });
+    }
+    return;
+  }
+
+  // 左侧和右侧一起切到目标文档；找不到原文档所在列时退回面板左边一列
+  const panelColumn = session.panel.viewColumn;
+  const sourceColumn = columnOfUri(session.uri)
+    || (panelColumn && panelColumn > 1 ? panelColumn - 1 : undefined);
+
+  // 先改右侧的 session.key，避免左侧打开时触发的自动跟随抢跑、丢掉锚点
+  followSession = session;
+  const binding = bindSession(session, target.uri, context, { anchor: target.anchor });
+
+  if (sourceColumn) {
+    try {
+      await vscode.commands.executeCommand('vscode.open', target.uri, {
+        viewColumn: sourceColumn,
+        preserveFocus: true,
+        preview: true,
+      });
+    } catch {
+      // 左侧打不开不影响右侧继续翻译
+    }
+  }
+
+  await binding;
 }
 
 function followActiveMarkdown(context) {
@@ -498,6 +571,10 @@ async function openPreview(context, arg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'ready') {
       if (session.signalReady) session.signalReady();
+    } else if (msg.type === 'openDocLink') {
+      openDocLink(session, msg.href, context).catch(error => {
+        vscode.window.showWarningMessage(`无法打开链接：${error && error.message || error}`);
+      });
     } else if (msg.type === 'refresh') {
       await render(session, context, { force: true });
     } else if (msg.type === 'toggleLayout') {
