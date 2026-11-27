@@ -6,6 +6,8 @@
  */
 
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const assert = require('assert');
 const { segment, batch, hasProse } = require('../src/segment');
 const {
@@ -13,13 +15,19 @@ const {
   isRetryable, retryAfterMs, backoffMs, buildErrorMessage, providerDetail,
   looksLikeAnthropicModel, buildRequestBody, dropOptionalParam,
   salvageTranslationItems, relaxRequestBody, renameMaxTokens, budgetWarning,
-  looksLikeDeepSeekModel,
+  looksLikeDeepSeekModel, normalizeGlossary, glossaryHash, cacheKey,
 } = require('../src/translate');
-const { renderMarkdown } = require('../src/webview');
+const { renderMarkdown, buildHtml } = require('../src/webview');
+const { CacheStore } = require('../src/cacheStore');
 
 let pass = 0;
 function t(name, fn) {
   try { fn(); pass++; console.log('  ✓ ' + name); }
+  catch (e) { console.log('  ✗ ' + name + '\n      ' + e.message); process.exitCode = 1; }
+}
+
+async function ta(name, fn) {
+  try { await fn(); pass++; console.log('  ✓ ' + name); }
   catch (e) { console.log('  ✗ ' + name + '\n      ' + e.message); process.exitCode = 1; }
 }
 
@@ -475,6 +483,80 @@ t('坏输入不会弄垮渲染', () => {
   assert.strictEqual(typeof renderMarkdown('![x]('.repeat(50)), 'string');
 });
 
+t('仅译文模式保留原文单元格，靠 CSS 隐藏（切换不丢内容）', () => {
+  const blocks = [{ index: 0, kind: 'paragraph', text: 'hello', translatable: true }];
+  const html = buildHtml({ cspSource: 'vscode-resource:', title: 't.md', blocks, layout: 'translation-only', targetLanguage: '中文' });
+  assert.ok(html.includes('<body class="translation-only">'));
+  assert.ok(html.includes('class="cell original"'));
+  assert.ok(html.includes('data-kind="paragraph"'));
+});
+
+
+
+t('可翻译块带跳转标记，代码块不带', () => {
+  const blocks = [
+    { index: 0, kind: 'paragraph', text: 'hello', translatable: true },
+    { index: 1, kind: 'code', text: '```\nx\n```', translatable: false },
+  ];
+  const html = buildHtml({ cspSource: 'vscode-resource:', title: 't.md', blocks, layout: 'side-by-side', targetLanguage: '中文' });
+  assert.ok(html.includes('data-index="0"'));
+  assert.ok(html.includes('title="点击跳到原文"'));
+  assert.ok(!html.includes('data-index="1"'));
+});
+
+console.log('\n— 分段行号 —');
+
+t('frontmatter、标题、代码、尾段的起止行都对得上', () => {
+  const md = ['---', 'title: x', '---', '', '# 标题', '', '第一段', '', '```js', 'const a = 1;', '```', '', '结尾'].join('\n');
+  const blocks = segment(md);
+  const rangeOf = kind => blocks.filter(b => b.kind === kind).map(b => [b.startLine, b.endLine]);
+  assert.deepStrictEqual(rangeOf('frontmatter'), [[0, 2]]);
+  assert.deepStrictEqual(rangeOf('heading'), [[4, 4]]);
+  assert.deepStrictEqual(rangeOf('code'), [[8, 10]]);
+  const last = blocks[blocks.length - 1];
+  assert.deepStrictEqual([last.startLine, last.endLine], [12, 12]);
+});
+
+t('多行段落覆盖整块', () => {
+  const blocks = segment('a\nb\nc\n\nd');
+  assert.deepStrictEqual([blocks[0].startLine, blocks[0].endLine], [0, 2]);
+  assert.deepStrictEqual([blocks[1].startLine, blocks[1].endLine], [4, 4]);
+});
+
+t('未闭合围栏停在最后一行', () => {
+  const blocks = segment('x\n\n```js\na\nb');
+  assert.deepStrictEqual([blocks[1].startLine, blocks[1].endLine], [2, 4]);
+});
+
+
+
+console.log('\n— 术语表 —');
+
+t('规范化：去空白、丢空值、挡原型键', () => {
+  const g = normalizeGlossary({ '  context window ': ' 上下文窗口 ', '': 'x', ok: '  ', '__proto__': 'hack', good: '好' });
+  assert.deepStrictEqual(Object.keys(g).sort(), ['context window', 'good']);
+  assert.strictEqual(g['context window'], '上下文窗口');
+});
+
+t('词条顺序不影响指纹，改译文会变', () => {
+  assert.strictEqual(glossaryHash({ a: '1', b: '2' }), glossaryHash({ b: '2', a: '1' }));
+  assert.notStrictEqual(glossaryHash({ a: '1', b: '2' }), glossaryHash({ a: '1', b: '3' }));
+  assert.strictEqual(glossaryHash({}), 'noglo');
+});
+
+t('缓存 key 跟着模型、语言、术语表、块哈希变', () => {
+  const base = { model: 'm', targetLanguage: 'zh', glossary: {}, blockHash: 'h' };
+  assert.strictEqual(cacheKey(base), 'm|zh|noglo|h');
+  assert.notStrictEqual(cacheKey(base), cacheKey({ ...base, model: 'n' }));
+  assert.notStrictEqual(cacheKey(base), cacheKey({ ...base, glossary: { a: '1' } }));
+});
+
+t('术语表注入 system prompt，空表不注入', () => {
+  const body = buildRequestBody({ ...OPTS, glossary: { 'context window': '上下文窗口' } }, BLOCK);
+  assert.ok(body.messages[0].content.includes('context window => 上下文窗口'));
+  assert.ok(!buildRequestBody({ ...OPTS }, BLOCK).messages[0].content.includes('Term glossary'));
+});
+
 // ------------------------------------------------ 真实文档
 const file = process.argv[2];
 if (file && fs.existsSync(file)) {
@@ -499,4 +581,40 @@ if (file && fs.existsSync(file)) {
   console.log('  待翻译样例：\n    ' + sample.join('\n    '));
 }
 
-console.log('\n通过 ' + pass + ' 项' + (process.exitCode ? '，有失败' : '，全部通过') + '\n');
+(async () => {
+  console.log('\n— 缓存落盘 —');
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mdb-cache-'));
+  const cacheFile = path.join(dir, 'translations.json');
+
+  await ta('写入后能从磁盘读回', async () => {
+    const a = new CacheStore(cacheFile);
+    await a.load();
+    a.set('k1', 'v1');
+    await a.flush();
+    const b = new CacheStore(cacheFile);
+    await b.load();
+    assert.strictEqual(b.get('k1'), 'v1');
+  });
+
+  await ta('清空后落盘为空', async () => {
+    const a = new CacheStore(cacheFile);
+    await a.load();
+    a.clear();
+    await a.flush();
+    const b = new CacheStore(cacheFile);
+    await b.load();
+    assert.strictEqual(b.size, 0);
+  });
+
+  await ta('坏文件不会抛错，按空缓存启动', async () => {
+    fs.writeFileSync(cacheFile, '{not json');
+    const a = new CacheStore(cacheFile);
+    const warn = console.warn;
+    console.warn = () => {};
+    try { await a.load(); } finally { console.warn = warn; }
+    assert.strictEqual(a.size, 0);
+  });
+
+  await fs.promises.rm(dir, { recursive: true, force: true });
+  console.log('\n通过 ' + pass + ' 项' + (process.exitCode ? '，有失败' : '，全部通过') + '\n');
+})();

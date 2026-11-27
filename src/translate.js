@@ -11,12 +11,48 @@
  * 只读取内容、只发 HTTP 请求，不碰文件系统。
  */
 
+const { sha1 } = require('./segment');
+
 class TranslateError extends Error {
   constructor(message, status) {
     super(message);
     this.name = 'TranslateError';
     this.status = status;
   }
+}
+
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** 术语表只留「原文 → 译文」都非空、且不是原型链键的条目。 */
+function normalizeGlossary(value) {
+  const out = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const source = String(rawKey == null ? '' : rawKey).trim();
+    const target = String(rawValue == null ? '' : rawValue).trim();
+    if (!source || !target || RESERVED_KEYS.has(source)) continue;
+    out[source] = target;
+  }
+  return out;
+}
+
+/** 术语表的稳定指纹：改词条、改译文都会让旧缓存失效。 */
+function glossaryHash(value) {
+  const entries = Object.entries(normalizeGlossary(value))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return entries.length ? sha1(JSON.stringify(entries)) : 'noglo';
+}
+
+function cacheKey({ model, targetLanguage, glossary, blockHash }) {
+  return `${model}|${targetLanguage}|${glossaryHash(glossary)}|${blockHash}`;
+}
+
+function glossaryPrompt(value) {
+  const entries = Object.entries(normalizeGlossary(value));
+  if (!entries.length) return '';
+  return '\n\nTerm glossary — whenever a source term appears, translate it exactly as specified ' +
+    '(match case-insensitively, keep the target wording unchanged):\n' +
+    entries.map(([source, target]) => `- ${source} => ${target}`).join('\n');
 }
 
 const SYSTEM_PROMPT = [
@@ -418,7 +454,7 @@ function buildRequestBody(opts, blocks) {
     max_tokens: opts.maxResponseTokens,
     stream: false,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: SYSTEM_PROMPT + glossaryPrompt(opts.glossary) },
       {
         role: 'user',
         content: JSON.stringify({
@@ -535,6 +571,10 @@ module.exports = {
   translateBatch,
   TranslateError,
   budgetWarning,
+  normalizeGlossary,
+  glossaryHash,
+  cacheKey,
+  glossaryPrompt,
   // 导出供测试
   parseTranslations,
   salvageTranslationItems,

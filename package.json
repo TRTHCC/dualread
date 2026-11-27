@@ -1,18 +1,19 @@
 {
-  "name": "md-bilingual-preview",
-  "displayName": "Markdown 双语预览",
-  "description": "把 Markdown 原文和 AI 译文左右并排显示，只读预览，永不写回文件",
-  "version": "0.5.0",
-  "publisher": "foxnz",
+  "name": "md-bilingual-reader",
+  "displayName": "DualRead — Markdown 双语阅读",
+  "description": "DualRead：在 VS Code 里并排或仅译文阅读 Markdown，只读预览，永不写回文件",
+  "version": "1.0.2",
+  "publisher": "trthcc",
+  "author": "TRTHCC",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/foxnz/md-bilingual-preview.git"
+    "url": "https://github.com/TRTHCC/dualread.git"
   },
   "bugs": {
-    "url": "https://github.com/foxnz/md-bilingual-preview/issues"
+    "url": "https://github.com/TRTHCC/dualread/issues"
   },
-  "homepage": "https://github.com/foxnz/md-bilingual-preview#readme",
+  "homepage": "https://github.com/TRTHCC/dualread#readme",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -26,24 +27,29 @@
     "commands": [
       {
         "command": "mdBilingual.openPreview",
-        "title": "Markdown 双语预览：打开",
-        "category": "Markdown 双语预览",
+        "title": "Markdown 双语阅读：打开",
+        "category": "Markdown 双语阅读",
         "icon": "$(book)"
       },
       {
         "command": "mdBilingual.refresh",
-        "title": "Markdown 双语预览：重新翻译（清缓存）",
-        "category": "Markdown 双语预览"
+        "title": "Markdown 双语阅读：重新翻译（忽略缓存）",
+        "category": "Markdown 双语阅读"
+      },
+      {
+        "command": "mdBilingual.clearCache",
+        "title": "Markdown 双语阅读：清空译文缓存",
+        "category": "Markdown 双语阅读"
       },
       {
         "command": "mdBilingual.setApiKey",
-        "title": "Markdown 双语预览：设置 API Key",
-        "category": "Markdown 双语预览"
+        "title": "Markdown 双语阅读：设置 API Key",
+        "category": "Markdown 双语阅读"
       },
       {
         "command": "mdBilingual.clearApiKey",
-        "title": "Markdown 双语预览：清除 API Key",
-        "category": "Markdown 双语预览"
+        "title": "Markdown 双语阅读：清除 API Key",
+        "category": "Markdown 双语阅读"
       }
     ],
     "menus": {
@@ -63,7 +69,7 @@
       ]
     },
     "configuration": {
-      "title": "Markdown 双语预览",
+      "title": "Markdown 双语阅读",
       "properties": {
         "mdBilingual.apiBaseUrl": {
           "type": "string",
@@ -79,6 +85,14 @@
           "type": "string",
           "default": "",
           "markdownDescription": "目标语言，例如 `Simplified Chinese`、`English`。留空则沿用 `#mdTranslator.targetLanguage#` 的值。"
+        },
+        "mdBilingual.glossary": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "术语表：原文 → 指定译文，例如 `{\"context window\": \"上下文窗口\", \"token\": \"词元\"}`。翻译时会强制使用这些译法；改动术语表会让旧译文缓存失效。"
         },
         "mdBilingual.temperature": {
           "type": "number",
@@ -168,13 +182,15 @@
           "default": "side-by-side",
           "enum": [
             "side-by-side",
+            "translation-only",
             "stacked"
           ],
           "enumDescriptions": [
             "左右并排：左原文，右译文",
+            "仅译文：只显示译文，代码块保留原样",
             "上下堆叠：适合窄面板"
           ],
-          "description": "布局方式。"
+          "description": "布局方式。面板右上角的「切换布局」按 并排 → 仅译文 → 堆叠 循环。"
         },
         "mdBilingual.autoRefresh": {
           "type": "boolean",

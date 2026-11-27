@@ -57,25 +57,29 @@ function segment(markdown) {
       if (/^(?:---|\.\.\.)\s*$/.test(lines[j])) { end = j; break; }
     }
     if (end !== -1) {
-      blocks.push({ kind: 'frontmatter', text: lines.slice(0, end + 1).join('\n') });
+      blocks.push({ kind: 'frontmatter', text: lines.slice(0, end + 1).join('\n'), startLine: 0, endLine: end });
       i = end + 1;
     }
   }
 
   let buffer = [];
+  let bufferStart = -1;
   const flush = () => {
     while (buffer.length && buffer[buffer.length - 1].trim() === '') buffer.pop();
     if (!buffer.length) return;
     const text = buffer.join('\n');
+    const startLine = bufferStart;
+    const endLine = startLine + buffer.length - 1;
     buffer = [];
+    bufferStart = -1;
     if (RULE_RE.test(text.trim()) && !text.includes('\n')) {
-      blocks.push({ kind: 'rule', text });
+      blocks.push({ kind: 'rule', text, startLine, endLine });
     } else if (LINK_DEF_RE.test(text) && text.split('\n').every(l => !l.trim() || LINK_DEF_RE.test(l))) {
-      blocks.push({ kind: 'linkdef', text });
+      blocks.push({ kind: 'linkdef', text, startLine, endLine });
     } else if (HTML_OPEN_RE.test(text)) {
-      blocks.push({ kind: 'html', text });
+      blocks.push({ kind: 'html', text, startLine, endLine });
     } else {
-      blocks.push({ kind: classifyText(text.split('\n')), text });
+      blocks.push({ kind: classifyText(text.split('\n')), text, startLine, endLine });
     }
   };
 
@@ -85,6 +89,7 @@ function segment(markdown) {
 
     if (fence) {
       flush();
+      const startLine = i;
       const marker = fence[2];
       const chunk = [line];
       let closed = false;
@@ -96,11 +101,18 @@ function segment(markdown) {
           break;
         }
       }
-      blocks.push({ kind: 'code', text: chunk.join('\n'), unclosed: !closed });
+      blocks.push({
+        kind: 'code',
+        text: chunk.join('\n'),
+        unclosed: !closed,
+        startLine,
+        endLine: i < lines.length ? i : lines.length - 1,
+      });
       continue;
     }
 
     if (line.trim() === '') { flush(); continue; }
+    if (!buffer.length) bufferStart = i;
     buffer.push(line);
   }
   flush();
@@ -112,6 +124,8 @@ function segment(markdown) {
     text: b.text,
     hash: sha1(b.text),
     translatable: !NEVER.has(b.kind) && hasProse(b.text),
+    startLine: b.startLine,
+    endLine: b.endLine,
   }));
 }
 

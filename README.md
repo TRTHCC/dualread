@@ -1,6 +1,10 @@
-# Markdown 双语预览
+# DualRead
 
-把 Markdown 原文和 AI 译文**左右并排**显示在侧边栏。纯只读预览，**永远不写回文件**。
+**Markdown 双语阅读 for VS Code。** 把原文和 AI 译文左右并排或仅译文显示，纯只读预览，**永远不写回文件**。
+
+译文**落盘缓存**（重开 VS Code 不重翻），支持**术语表**强制统一译法，**点击译文可直接跳到原文对应行**。
+
+当前维护者：TRTHCC（扩展 ID `trthcc.md-bilingual-reader`），基于 foxnz/md-bilingual-preview 二开。
 
 ```
 ┌─────────────────────────────┬─────────────────────────────┐
@@ -28,18 +32,21 @@
 ```bash
 npm install
 npx @vscode/vsce package
-code --install-extension md-bilingual-preview-0.5.0.vsix
+code --install-extension md-bilingual-reader-1.0.2.vsix
 ```
 
 装完要 `Developer: Reload Window`。
 
 ## 使用
 
-1. `Cmd+Shift+P` → **Markdown 双语预览：设置 API Key**（只需一次，存在 VS Code SecretStorage，不进 settings.json）
-2. 打开任意 `.md`，`Cmd+Shift+P` → **Markdown 双语预览：打开**
+1. `Cmd+Shift+P` → **Markdown 双语阅读：设置 API Key**（只需一次，存在 VS Code SecretStorage，不进 settings.json）
+2. 打开任意 `.md`，`Cmd+Shift+P` → **Markdown 双语阅读：打开**
    也可以点编辑器标题栏的书本图标，或在资源管理器里右键文件
 
-面板右上角有「切换布局」（并排 ⇄ 上下堆叠，窄屏用）和「重新翻译」。
+面板右上角有「切换布局」（并排 → 仅译文 → 上下堆叠）和「重新翻译」（忽略缓存、强制重译当前文档）。**仅译文**模式下左栏收起，只显示译文；代码块和 HTML 保留原样，frontmatter 和链接定义隐藏。
+
+- **点击右侧译文** → 编辑器跳到该段的原文行。选中文字或点击链接时不会触发跳转。
+- 译文默认缓存在 VS Code 的 globalStorage 里，重开窗口、重开文档都不再请求。要全局清空用命令 **Markdown 双语阅读：清空译文缓存**。
 
 ### 关于自定义编辑器
 
@@ -56,7 +63,8 @@ code --install-extension md-bilingual-preview-0.5.0.vsix
 | `mdBilingual.apiBaseUrl` | 空 → 回落 | OpenAI 兼容接口。DeepSeek 填 `https://api.deepseek.com`（无 `/v1`），中转站一般是 `https://域名/v1` |
 | `mdBilingual.model` | 空 → 回落 | 模型名。`deepseek-*`、`gpt-*`、`claude-*` 都行，见下节 |
 | `mdBilingual.targetLanguage` | 空 → 回落 | 目标语言，如 `Simplified Chinese` |
-| `mdBilingual.layout` | `side-by-side` | 并排或上下堆叠 |
+| `mdBilingual.glossary` | `{}` | 术语表，`原文 → 指定译文`。例如 `{"context window": "上下文窗口", "token": "词元"}`。改术语表会让旧缓存失效 |
+| `mdBilingual.layout` | `side-by-side` | `side-by-side` 并排、`translation-only` 仅译文、`stacked` 上下堆叠 |
 | `mdBilingual.maxSegmentsPerBatch` | 20 | 每批段落数，调小可降低模型弄错 id 的概率 |
 | `mdBilingual.maxCharsPerBatch` | 6000 | 每批字符数 |
 | `mdBilingual.concurrency` | 1 | 并发请求数。默认串行，对配额紧张的网关最友好 |
@@ -77,7 +85,7 @@ DeepSeek 官方接口就是 OpenAI 格式，直连即可，不需要中转站：
 "mdBilingual.targetLanguage": "Simplified Chinese"
 ```
 
-API Key 用命令 **Markdown 双语预览：设置 API Key** 单独设，不写进 settings.json。
+API Key 用命令 **Markdown 双语阅读：设置 API Key** 单独设，不写进 settings.json。
 
 两个容易踩的点，插件已经替你处理了：
 
@@ -192,7 +200,20 @@ grep -rE 'writeFile|WorkspaceEdit|applyEdit|\.edit\(|fs\.' src/
 - **缩进式代码块**（4 空格，非围栏）不受保护，会被当作正文送去翻译。围栏代码块不受影响。
 - 行内元素靠 system prompt 约束，不做占位符替换。极少数情况下模型可能动到行内代码或链接地址。因为是只读预览，出错不会污染任何文件。
 - 松散列表（条目之间有空行）会被切成多块，各自渲染成独立的 `<ul>`，视觉上条目间距略大。
-- 缓存不落盘，重开 VS Code 需要重新翻译。
+- 缓存按「模型 + 目标语言 + 术语表 + 段落哈希」存，最多保留 2 万段，超出后淘汰最旧的；API Key 不进缓存、不进 settings.json。
+
+## 与上游的关系
+
+这是 [TRTHCC/dualread](https://github.com/TRTHCC/dualread)，底座是 [foxnz/md-bilingual-preview](https://github.com/foxnz/md-bilingual-preview)（MIT，v0.5.0）。保留的部分：块级切分、OpenAI 兼容客户端、限流/截断处理、并排只读预览。本仓库新增：
+
+- 译文持久化缓存（globalStorage + 原子落盘 + 容量上限）与「清空译文缓存」命令
+- 术语表 `mdBilingual.glossary`，注入 system prompt，并参与缓存 key
+- 段落行号映射与「点击译文跳原文」
+- 「仅译文」布局与面板内布局切换
+- 点击译文跳原文
+- 相关单元测试（`node test/check.js`）
+
+原仓库的 MIT 许可证与版权声明保留在 `LICENSE` 中。
 
 ## 自检
 

@@ -70,13 +70,18 @@ body {
 
 .row { display: grid; gap: 0 32px; align-items: start; border-bottom: 1px solid transparent; }
 body.side-by-side .row { grid-template-columns: 1fr 1fr; }
-body.stacked .row { grid-template-columns: 1fr; }
+body.stacked .row, body.translation-only .row { grid-template-columns: 1fr; }
 body.stacked .row .t { padding-top: 0; }
+body.translation-only .cell.original { display: none; }
+body.translation-only .row[data-kind="frontmatter"],
+body.translation-only .row[data-kind="linkdef"] { display: none; }
+body.translation-only .cell.t { border-left: 0; padding-left: 0; margin-left: 0; }
 .row.full { grid-template-columns: 1fr; }
 .row:hover { background: var(--vscode-list-hoverBackground); }
 
 .cell { min-width: 0; overflow-wrap: anywhere; }
 .cell.t { color: var(--vscode-foreground); }
+.jumpable .cell.t { cursor: pointer; }
 body.side-by-side .cell.t { border-left: 1px solid var(--vscode-panel-border); padding-left: 32px; margin-left: -32px; }
 .pending { color: var(--vscode-descriptionForeground); font-style: italic; opacity: .6; }
 .failed { color: var(--vscode-descriptionForeground); font-style: italic; }
@@ -138,6 +143,15 @@ window.addEventListener('message', (event) => {
 document.getElementById('refresh').addEventListener('click', () => vscode.postMessage({ type: 'refresh' }));
 document.getElementById('toggle').addEventListener('click', () => vscode.postMessage({ type: 'toggleLayout' }));
 
+// 点译文跳到原文对应行。选区和链接优先——用户想复制或点链接时不要抢。
+document.getElementById('doc').addEventListener('click', (event) => {
+  if (!event.target.closest || event.target.closest('a')) return;
+  if (window.getSelection && String(window.getSelection()).trim()) return;
+  const cell = event.target.closest('.cell.t');
+  const row = cell && cell.closest('.row.jumpable');
+  if (row) vscode.postMessage({ type: 'reveal', index: Number(row.dataset.index) });
+});
+
 // 监听器已挂好，扩展端可以开始发消息了。
 // 重新赋值 webview.html 会让这份文档整个重来，在新的监听器注册之前
 // postMessage 的内容会被静默丢弃——所以必须等这一声再发。
@@ -152,11 +166,11 @@ function buildHtml({ cspSource, title, blocks, layout, targetLanguage }) {
   const rows = blocks.map(block => {
     const left = renderMarkdown(block.text);
     if (!block.translatable) {
-      return `<div class="row full"><div class="cell">${left}</div></div>`;
+      return `<div class="row full" data-kind="${block.kind}"><div class="cell original">${left}</div></div>`;
     }
-    return `<div class="row">` +
-      `<div class="cell">${left}</div>` +
-      `<div class="cell t pending" id="t${block.index}">翻译中…</div>` +
+    return `<div class="row jumpable" data-kind="${block.kind}" data-index="${block.index}">` +
+      `<div class="cell original">${left}</div>` +
+      `<div class="cell t pending" id="t${block.index}" title="点击跳到原文">翻译中…</div>` +
       `</div>`;
   }).join('\n');
 

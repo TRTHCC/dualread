@@ -3,14 +3,15 @@
 const vscode = require('vscode');
 const path = require('path');
 const { segment, batch } = require('./segment');
-const { translateBatch, TranslateError, budgetWarning } = require('./translate');
+const { translateBatch, TranslateError, budgetWarning, normalizeGlossary, cacheKey } = require('./translate');
 const { buildHtml, renderMarkdown } = require('./webview');
+const { CacheStore } = require('./cacheStore');
 
 const SECRET_KEY = 'mdBilingual.apiKey';
 const MD_EXT = new Set(['.md', '.markdown']);
 
-/** 译文缓存：`${model}|${lang}|${blockHash}` -> 译文。只在内存里，不落盘。 */
-const cache = new Map();
+/** 译文缓存，落盘到 globalStorage，activate 时重建。 */
+let cacheStore;
 
 /** uri.toString() -> session */
 const sessions = new Map();
@@ -48,6 +49,7 @@ function resolveConfig() {
     useJsonResponseFormat: mine.get('useJsonResponseFormat', false),
     layout: mine.get('layout', 'side-by-side'),
     autoRefresh: mine.get('autoRefresh', true),
+    glossary: normalizeGlossary(mine.get('glossary', {})),
   };
 }
 
@@ -163,9 +165,10 @@ async function translateSession(session, context, { force = false } = {}) {
   const todo = [];
   let cached = 0;
   for (const block of pending) {
-    const key = `${cfg.model}|${cfg.targetLanguage}|${block.hash}`;
-    if (!force && cache.has(key)) {
-      panel.webview.postMessage({ type: 'translated', index: block.index, html: renderMarkdown(cache.get(key)) });
+    const key = cacheKey({ model: cfg.model, targetLanguage: cfg.targetLanguage, glossary: cfg.glossary, blockHash: block.hash });
+    const hit = cacheStore && cacheStore.get(key);
+    if (!force && hit !== undefined) {
+      panel.webview.postMessage({ type: 'translated', index: block.index, html: renderMarkdown(hit) });
       cached++;
     } else {
       todo.push(block);
@@ -213,7 +216,9 @@ async function translateSession(session, context, { force = false } = {}) {
       for (const block of group) {
         const text = translations.get(`s${block.index}`);
         if (typeof text === 'string' && text.trim()) {
-          cache.set(`${cfg.model}|${cfg.targetLanguage}|${block.hash}`, text);
+          if (cacheStore) {
+            cacheStore.set(cacheKey({ model: cfg.model, targetLanguage: cfg.targetLanguage, glossary: cfg.glossary, blockHash: block.hash }), text);
+          }
           panel.webview.postMessage({ type: 'translated', index: block.index, html: renderMarkdown(text) });
         } else {
           failedBlocks++;
@@ -294,6 +299,21 @@ async function render(session, context, { force = false } = {}) {
   await translateSession(session, context, { force });
 }
 
+// ---------------------------------------------------------------- 定位原文
+
+async function revealSource(session, index) {
+  const block = session.blocks[index];
+  if (!block) return;
+  const doc = await vscode.workspace.openTextDocument(session.uri);
+  const editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
+  const lastLine = Math.max(0, doc.lineCount - 1);
+  const start = Math.max(0, Math.min(block.startLine, lastLine));
+  const end = Math.max(start, Math.min(block.endLine, lastLine));
+  const range = new vscode.Range(start, 0, end, doc.lineAt(end).text.length);
+  editor.selection = new vscode.Selection(start, 0, start, 0);
+  editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+}
+
 // ---------------------------------------------------------------- 命令
 
 async function openPreview(context, arg) {
@@ -333,15 +353,26 @@ async function openPreview(context, arg) {
     } else if (msg.type === 'refresh') {
       await render(session, context, { force: true });
     } else if (msg.type === 'toggleLayout') {
-      session.layout = session.layout === 'side-by-side' ? 'stacked' : 'side-by-side';
+      const order = ['side-by-side', 'translation-only', 'stacked'];
+      const index = order.indexOf(session.layout);
+      session.layout = order[(index + 1) % order.length] || order[0];
       panel.webview.postMessage({ type: 'layout', layout: session.layout });
+    } else if (msg.type === 'reveal') {
+      try {
+        await revealSource(session, msg.index);
+      } catch (error) {
+        panel.webview.postMessage({ type: 'error', message: String(error && error.message || error) });
+      }
     }
   });
 
   await render(session, context);
 }
 
-function activate(context) {
+async function activate(context) {
+  cacheStore = new CacheStore(path.join(context.globalStorageUri.fsPath, 'translations.json'));
+  await cacheStore.load();
+
   context.subscriptions.push(
     vscode.commands.registerCommand('mdBilingual.openPreview', arg => openPreview(context, arg)),
 
@@ -353,8 +384,16 @@ function activate(context) {
         vscode.window.showWarningMessage('没有打开中的双语预览面板。');
         return;
       }
-      cache.clear();
       await render(target, context, { force: true });
+    }),
+
+    vscode.commands.registerCommand('mdBilingual.clearCache', async () => {
+      const size = cacheStore ? cacheStore.size : 0;
+      if (cacheStore) {
+        cacheStore.clear();
+        await cacheStore.flush();
+      }
+      vscode.window.showInformationMessage(`已清空 ${size} 条译文缓存。`);
     }),
 
     vscode.commands.registerCommand('mdBilingual.setApiKey', () => promptForApiKey(context)),
@@ -379,9 +418,12 @@ function activate(context) {
   );
 }
 
-function deactivate() {
-  cache.clear();
+async function deactivate() {
   sessions.clear();
+  if (cacheStore) {
+    await cacheStore.flush();
+    cacheStore = undefined;
+  }
 }
 
 module.exports = { activate, deactivate };
